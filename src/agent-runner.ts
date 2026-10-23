@@ -27,7 +27,7 @@ import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
-import { createAskParentTool, createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager } from "./nested-tools.js";
+import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager } from "./nested-tools.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.js";
@@ -995,35 +995,27 @@ export async function runAgent(
     ? new Set(agentConfig.disallowedTools)
     : undefined;
 
-  // Nested delegation tools (opt-in, ownership-scoped). Empty unless the agent
-  // set `allowed_subagents` and a nestedRuntime was provided — and never when
-  // isolated. Their names collide with EXCLUDED_TOOL_NAMES by design, so the
-  // scoping below re-admits them explicitly (registry deny + active-set narrow).
+  // Subagent tools are built together so their names have one scoping path.
+  // ask_parent is always available to a spawned agent; delegation remains
+  // opt-in, ownership-scoped, and disabled when isolated or at the depth cap.
+  // Their names collide with EXCLUDED_TOOL_NAMES by design, so the scoping
+  // below re-admits only the tools this agent is allowed to use.
   const effectiveMaxDepth = options.nestedRuntime?.maxSubagentDepth ?? getMaxSubagentDepth();
   // At (or past) the cap this agent can never spawn, so it can never own a child
-  // to fetch from or steer either — inject nothing rather than three tools whose
-  // every call is an error. This is also what makes `maxSubagentDepth` 0/1 mean
-  // "nesting off" instead of "nesting always fails".
-  const nestedRuntime = options.nestedRuntime && options.nestedRuntime.depth < effectiveMaxDepth
-    ? options.nestedRuntime
-    : undefined;
-  const nestedTools = agentConfig?.allowedSubagents && nestedRuntime && !isolated
+  // to fetch from or steer either. The shared factory keeps only ask_parent in
+  // that case, so `maxSubagentDepth` 0/1 still means delegation is off.
+  const injectedTools = options.nestedRuntime
     ? createNestedSubagentTools({
-        manager: nestedRuntime.manager,
+        manager: options.nestedRuntime.manager,
         pi: options.pi,
-        parentAgentId: nestedRuntime.parentAgentId,
-        depth: nestedRuntime.depth,
+        parentAgentId: options.nestedRuntime.parentAgentId,
+        depth: options.nestedRuntime.depth,
         maxSubagentDepth: effectiveMaxDepth,
-        allowedSubagents: agentConfig.allowedSubagents,
+        allowedSubagents: agentConfig?.allowedSubagents,
+        isolated,
         configCwd,
       })
     : [];
-  // Spawned agents may ask their immediate parent for clarification even when
-  // they cannot delegate further (or run in an isolated worktree).
-  const parentQuestionTool = options.nestedRuntime
-    ? createAskParentTool(options.nestedRuntime.manager, options.nestedRuntime.parentAgentId)
-    : undefined;
-  const injectedTools = [...(parentQuestionTool ? [parentQuestionTool] : []), ...nestedTools];
   const nestedToolNames = new Set(injectedTools.map(tool => tool.name));
 
   // The `agent({ schema })` contract: this child reports its answer by calling
@@ -1080,8 +1072,8 @@ export async function runAgent(
   let sessionTools: string[] | undefined;
   let sessionExcludeTools: string[] | undefined;
   if (noExtensions) {
-    // Strict allowlist: built-ins the agent asked for, plus any opt-in nested
-    // tools (whose names would otherwise be dropped as EXCLUDED_TOOL_NAMES).
+    // Strict allowlist: built-ins the agent asked for, plus its injected
+    // subagent tools (whose names would otherwise be dropped as EXCLUDED_TOOL_NAMES).
     sessionTools = [
       ...toolNames.filter(
         (t) => !EXCLUDED_TOOL_NAMES.includes(t) && !disallowedSet?.has(t),
