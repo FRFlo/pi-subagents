@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAvailableTypes, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
-import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager, setMaxSubagentDepth } from "../src/nested-tools.js";
+import { createAskParentTool, createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager, setMaxSubagentDepth } from "../src/nested-tools.js";
 import { encodeCwd } from "../src/output-file.js";
+import { SUBAGENT_TOOL_NAMES } from "../src/tool-names.js";
 
 let cwd: string;
 let manager: NestedAgentManager;
@@ -90,6 +91,24 @@ afterEach(() => {
 });
 
 describe("child-safe nested Agent tools", () => {
+  it("records a clarification request on the asking agent for its parent", async () => {
+    const record = { id: "asking-agent", type: "scout", status: "running", parentAgentId: "parent-1" };
+    records.set(record.id, record);
+    const tool = createAskParentTool(manager, record.id);
+
+    expect(tool.name).toBe(SUBAGENT_TOOL_NAMES.ASK_PARENT);
+    const result = await execute(tool, {
+      question: "Which format should I use?",
+      context: "The output format is not specified.",
+    });
+
+    expect(result.isError).toBe(false);
+    expect(record.parentQuestion).toEqual({
+      question: "Which format should I use?",
+      context: "The output format is not specified.",
+    });
+  });
+
   it("allows any enabled agent when allowed_subagents is omitted", async () => {
     const [agent] = tools();
     const result = await execute(agent, {

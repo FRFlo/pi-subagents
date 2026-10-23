@@ -26,6 +26,7 @@ import {
   writeInitialEntry,
 } from "./output-file.js";
 import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+import { SUBAGENT_TOOL_NAMES } from "./tool-names.js";
 import type {
   AgentConfig,
   AgentInvocation,
@@ -423,4 +424,28 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
   });
 
   return [agentTool, resultTool, steerTool];
+}
+
+/** Create a scoped clarification tool for an agent spawned by this manager. */
+export function createAskParentTool(manager: NestedAgentManager, agentId: string): ToolDefinition {
+  return defineTool({
+    name: SUBAGENT_TOOL_NAMES.ASK_PARENT,
+    label: "Ask parent",
+    description:
+      "Request clarification from your immediate parent. The request is surfaced with your final result; " +
+      "finish your current turn after asking. Your parent can then resume you with its answer.",
+    parameters: Type.Object({
+      question: Type.String({ description: "The specific information or decision you need from your parent." }),
+      context: Type.Optional(Type.String({ description: "Brief context explaining why this blocks or affects the task." })),
+    }),
+    execute: async (_toolCallId, params) => {
+      const record = manager.getRecord(agentId);
+      if (!record) return textResult("Could not route question: this agent is no longer available.", true);
+      record.parentQuestion = { question: params.question, ...(params.context ? { context: params.context } : {}) };
+      return textResult(
+        "Question recorded for your immediate parent. Stop and report that you are waiting for an answer; " +
+        "the parent can resume you with the answer.",
+      );
+    },
+  });
 }

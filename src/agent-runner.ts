@@ -27,28 +27,18 @@ import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
-import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager } from "./nested-tools.js";
+import { createAskParentTool, createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager } from "./nested-tools.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.js";
+import { SUBAGENT_TOOL_NAMES } from "./tool-names.js";
 import type { SubagentType, ThinkingLevel } from "./types.js";
 import type { LifetimeUsage } from "./usage.js";
 import type { CompiledSchema } from "./workflow/json-schema.js";
 
-/**
- * Tool names registered by THIS extension. Single source of truth so the
- * registration sites (index.ts) and the subagent exclusion list below can't
- * drift apart. These are our own tools, not pi built-ins, so they can't be
- * derived from pi — but they only need defining once.
- */
-export const SUBAGENT_TOOL_NAMES = {
-  AGENT: "Agent",
-  WORKFLOW: "SubagentWorkflow",
-  GET_RESULT: "get_subagent_result",
-  STEER: "steer_subagent",
-} as const;
+export { SUBAGENT_TOOL_NAMES } from "./tool-names.js";
 
-/** Names of tools registered by this extension that subagents must NOT inherit. */
+/** Extension-owned tools are denied from the inherited registry, then selectively re-admitted. */
 const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
 
 /**
@@ -1028,7 +1018,13 @@ export async function runAgent(
         configCwd,
       })
     : [];
-  const nestedToolNames = new Set(nestedTools.map(tool => tool.name));
+  // Spawned agents may ask their immediate parent for clarification even when
+  // they cannot delegate further (or run in an isolated worktree).
+  const parentQuestionTool = options.nestedRuntime
+    ? createAskParentTool(options.nestedRuntime.manager, options.nestedRuntime.parentAgentId)
+    : undefined;
+  const injectedTools = [...(parentQuestionTool ? [parentQuestionTool] : []), ...nestedTools];
+  const nestedToolNames = new Set(injectedTools.map(tool => tool.name));
 
   // The `agent({ schema })` contract: this child reports its answer by calling
   // StructuredOutput, and `structuredJson` below is what the caller reads. The
@@ -1159,7 +1155,7 @@ export async function runAgent(
     ...(parentModelRuntime !== undefined && { modelRuntime: parentModelRuntime as never }),
     model,
     tools: sessionTools,
-    customTools: [...nestedTools, ...structuredTools],
+    customTools: [...injectedTools, ...structuredTools],
     resourceLoader: loader,
   };
   if (sessionExcludeTools) {

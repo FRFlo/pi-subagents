@@ -119,6 +119,7 @@ vi.mock("../src/skill-loader.js", () => ({
 
 vi.mock("../src/nested-tools.js", () => ({
   getMaxSubagentDepth: vi.fn(() => 2),
+  createAskParentTool: vi.fn(() => ({ name: "ask_parent" })),
   createNestedSubagentTools: vi.fn(() => [
     { name: "Agent" },
     { name: "get_subagent_result" },
@@ -1135,7 +1136,8 @@ describe("agent-runner master tool allowlist", () => {
 
     expect(createNestedSubagentTools).not.toHaveBeenCalled();
     expect(lastToolsPassed()).not.toContain("Agent");
-    expect(createAgentSession.mock.calls[0][0].customTools).toEqual([]);
+    expect(createAgentSession.mock.calls[0][0].customTools).toEqual([{ name: "ask_parent" }]);
+    expect(lastToolsPassed()).toContain("ask_parent");
   });
 
   it("injects scoped nested tools for an opted-in non-isolated agent", async () => {
@@ -1162,9 +1164,9 @@ describe("agent-runner master tool allowlist", () => {
       configCwd: "/tmp",
     }));
     expect(lastToolsPassed()).toEqual(expect.arrayContaining([
-      "Agent", "get_subagent_result", "steer_subagent",
+      "Agent", "get_subagent_result", "steer_subagent", "ask_parent",
     ]));
-    expect(createAgentSession.mock.calls[0][0].customTools).toHaveLength(3);
+    expect(createAgentSession.mock.calls[0][0].customTools).toHaveLength(4);
   });
 
   it("keeps opt-in nested tools active UNDER EXTENSIONS despite the EXCLUDED-name collision", async () => {
@@ -1188,10 +1190,10 @@ describe("agent-runner master tool allowlist", () => {
     const opts = createAgentSession.mock.calls[0][0];
     // (a) not denied at the registry gate, and passed as customTools.
     expect(opts.excludeTools ?? []).not.toContain("Agent");
-    expect(opts.customTools).toHaveLength(3);
+    expect(opts.customTools).toHaveLength(4);
     // (b) survive the active-set renarrow alongside a real extension tool.
     const active = lastToolsPassed();
-    expect(active).toEqual(expect.arrayContaining(["Agent", "get_subagent_result", "steer_subagent"]));
+    expect(active).toEqual(expect.arrayContaining(["Agent", "get_subagent_result", "steer_subagent", "ask_parent"]));
     expect(active).toContain("ok_ext");
   });
 
@@ -1513,6 +1515,7 @@ describe("agent-runner master tool allowlist", () => {
 
     expect(createNestedSubagentTools).not.toHaveBeenCalled();
     expect(lastToolsPassed()).not.toContain("Agent");
+    expect(lastToolsPassed()).toContain("ask_parent");
   });
 
   it("passes the inherited depth cap through to the nested tools", async () => {
@@ -1549,6 +1552,7 @@ describe("agent-runner master tool allowlist", () => {
 
     expect(createNestedSubagentTools).not.toHaveBeenCalled();
     expect(lastToolsPassed()).not.toContain("Agent");
+    expect(lastToolsPassed()).toContain("ask_parent");
   });
 
   it("extensions: false with disallowedTools — denylist applies to built-ins", async () => {
